@@ -551,6 +551,18 @@
       syncAddForm(form);
     });
     form.addEventListener('submit', (e) => { e.preventDefault(); submitAdd(form); });
+    // 빈 시간 칸을 누르면 지금 시각(예: 15:01) 대신 정각으로 채움: 오늘이면 다음 정시, 다른 날이면 09:00
+    const onTheHour = () => {
+      if (F.date.value && F.date.value !== C.today()) return '09:00';
+      return `${C.pad(Math.min(new Date().getHours() + 1, 23))}:00`;
+    };
+    const plusHour = (t) => { const [h, m] = t.split(':').map(Number); return h >= 23 ? '23:59' : `${C.pad(h + 1)}:${C.pad(m)}`; };
+    const fillStart = () => { if (!F.start.value) F.start.value = onTheHour(); };
+    const fillEnd = () => { if (!F.end.value) F.end.value = F.start.value ? plusHour(F.start.value) : onTheHour(); };
+    ['pointerdown', 'focus'].forEach((ev) => {
+      F.start.addEventListener(ev, fillStart);
+      F.end.addEventListener(ev, fillEnd);
+    });
     dlg.showModal();
     if (matchMedia('(hover: hover)').matches) F.title.focus();
   }
