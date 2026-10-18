@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Day · 플래너</title>
+  <meta name="description" content="구글 시트로 관리하는 나만의 달력·체크리스트">
+  <meta name="theme-color" content="#f6f5f2" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#121214" media="(prefers-color-scheme: dark)">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="Day">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icons/icon-180.png">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css">
+  <link rel="stylesheet" href="style.css">
+  <script>try { var t = JSON.parse(localStorage.getItem('day.theme') || '""'); if (t) document.documentElement.dataset.theme = t; } catch (e) {}</script>
+</head>
+<body>
+  <header class="top">
+    <div class="brand" aria-label="Day">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4.5" width="18" height="16" rx="4.5" fill="none" stroke="currentColor" stroke-width="2"/><path d="M8 3v3M16 3v3M8.5 13l2.4 2.4L16 10.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      <span>Day</span>
+    </div>
+    <nav class="tabs" role="tablist" aria-label="화면">
+      <button role="tab" data-action="tab" data-tab="cal" id="tab-cal">달력</button>
+      <button role="tab" data-action="tab" data-tab="today" id="tab-today">오늘<span class="tab-badge" id="tab-badge" hidden></span></button>
+    </nav>
+    <div class="top-actions">
+      <button class="sync" data-action="refresh" id="sync" title="새로고침">
+        <span class="sync-dot"></span><span class="sync-text" id="sync-text"></span>
+      </button>
+      <button class="icon-btn" data-action="settings" aria-label="설정" title="설정">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15.2a3.2 3.2 0 1 0 0-6.4 3.2 3.2 0 0 0 0 6.4Z" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M19.4 13.5a7.6 7.6 0 0 0 0-3l2-1.6-2-3.4-2.4 1a7.5 7.5 0 0 0-2.6-1.5L14 2.5h-4l-.4 2.5A7.5 7.5 0 0 0 7 6.5l-2.4-1-2 3.4 2 1.6a7.6 7.6 0 0 0 0 3l-2 1.6 2 3.4 2.4-1a7.5 7.5 0 0 0 2.6 1.5l.4 2.5h4l.4-2.5a7.5 7.5 0 0 0 2.6-1.5l2.4 1 2-3.4-2-1.6Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>
+      </button>
+    </div>
+  </header>
+
+  <div id="notice"></div>
+  <main id="view" tabindex="-1"></main>
+
+  <button class="fab" data-action="add" aria-label="추가하기" title="추가하기">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/></svg>
+  </button>
+
+  <dialog id="dlg-add" class="sheet" aria-labelledby="add-title"></dialog>
+  <dialog id="dlg-settings" class="sheet" aria-labelledby="settings-title"></dialog>
+  <div id="toast" role="status" aria-live="polite"></div>
+
+  <script src="core.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
