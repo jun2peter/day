@@ -22,6 +22,7 @@
     x: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>',
     copy: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8.5" y="8.5" width="12" height="12" rx="3" fill="none" stroke="currentColor" stroke-width="2"/><path d="M15.5 8.5V6a2.5 2.5 0 0 0-2.5-2.5H6A2.5 2.5 0 0 0 3.5 6v7A2.5 2.5 0 0 0 6 15.5h2.5" fill="none" stroke="currentColor" stroke-width="2"/></svg>',
     ext: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 4h6v6M20 4l-9 9M18 14v4a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+    dots: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="5.5" cy="12" r="1.9" fill="currentColor"/><circle cx="12" cy="12" r="1.9" fill="currentColor"/><circle cx="18.5" cy="12" r="1.9" fill="currentColor"/></svg>',
   };
 
   const S = {
@@ -31,6 +32,7 @@
     tab: LS.get('tab', 'cal'),
     weekStart: LS.get('weekStart', 0),
     theme: LS.get('theme', ''),
+    serverVersion: LS.get('serverVersion', 0),
     raw: null,
     data: null,
     done: new Map(),
@@ -101,9 +103,11 @@
     if (S.url) return S.raw || { events: [], tasks: [], done: [] };
     const demo = demoRaw();
     const adds = LS.get('demoAdds', { events: [], tasks: [] });
+    const gone = LS.get('demoDeleted', []);
+    const keep = (kind) => (r) => !gone.some((g) => g.kind === kind && String(g.row) === String(r.row));
     return {
-      events: demo.events.concat(adds.events),
-      tasks: demo.tasks.concat(adds.tasks),
+      events: demo.events.concat(adds.events).filter(keep('event')),
+      tasks: demo.tasks.concat(adds.tasks).filter(keep('task')),
       done: LS.get('demoDone', null) || demo.done,
     };
   }
@@ -116,6 +120,13 @@
     let n = 0;
     for (const op of pend) {
       if (op.action === 'add') (op.kind === 'event' ? r.events : r.tasks).push(Object.assign({}, op.row, { row: 'new' + (++n), pending: true }));
+    }
+    for (const op of pend) {
+      if (op.action !== 'delete') continue;
+      const list = op.kind === 'event' ? r.events : r.tasks;
+      let i = list.findIndex((x) => String(x.row) === String(op.row) && C.titleOf(x, op.kind) === op.title);
+      if (i < 0) i = list.findIndex((x) => C.titleOf(x, op.kind) === op.title && C.dateOf(x) === (op.date || ''));
+      if (i >= 0) list.splice(i, 1);
     }
     S.data = C.normalize(r);
     S.done = S.data.done;
@@ -152,6 +163,8 @@
     LS.set('cache', S.raw);
     if (j.sheetUrl) { S.sheetUrl = j.sheetUrl; LS.set('sheetUrl', j.sheetUrl); }
     if (j.title) { S.sheetTitle = j.title; LS.set('sheetTitle', j.title); }
+    S.serverVersion = j.version || 1;
+    LS.set('serverVersion', S.serverVersion);
     S.lastSync = Date.now();
     S.status = 'ok';
     S.error = '';
@@ -200,6 +213,7 @@
     render();
     clearTimeout(S.flushTimer);
     S.flushTimer = setTimeout(sync, 700); // 연달아 체크하면 한 번에 묶어서 보냄
+    return op;
   }
 
   /* ── 체크 · 추가 ───────────────────────── */
@@ -241,13 +255,15 @@
     return h ? `<span class="meta">${h}</span>` : '';
   }
 
+  const moreBtn = (it) => `<button class="more" data-action="item" data-kind="${it.kind}" data-row="${esc(it.row)}" aria-label="${esc(it.title)} 자세히 보기">${I.dots}</button>`;
+
   function taskHtml(t, opts) {
     const done = S.done.has(t.key);
     const pop = done && S.popKey === t.key ? ' pop' : '';
-    return `<button class="task${done ? ' done' : ''}${pop}" data-action="toggle" data-date="${esc(t.dateKey)}" data-title="${esc(t.title)}" role="checkbox" aria-checked="${done}">
+    return `<div class="item-row"><button class="task${done ? ' done' : ''}${pop}" data-action="toggle" data-date="${esc(t.dateKey)}" data-title="${esc(t.title)}" role="checkbox" aria-checked="${done}">
       <span class="box">${I.check}</span>
       <span class="task-body"><span class="task-title">${esc(t.title)}</span>${tags(t, opts)}</span>
-    </button>`;
+    </button>${moreBtn(t)}</div>`;
   }
 
   function evHtml(e) {
@@ -255,7 +271,7 @@
       ? `<div class="ev-time">${e.start}${e.end ? `<small>~ ${e.end}</small>` : ''}</div>`
       : '<div class="ev-time allday">종일</div>';
     return `<div class="ev${e.alert != null ? ' alert' : ''}">${time}<div class="ev-bar"></div>
-      <div class="ev-body"><div class="ev-title">${esc(e.title)}</div>${tags(e)}</div></div>`;
+      <div class="ev-body"><div class="ev-title">${esc(e.title)}</div>${tags(e)}</div>${moreBtn(e)}</div>`;
   }
 
   function alertHtml(a) {
@@ -578,6 +594,96 @@
     toast(S.url ? '추가했어요 · 시트에 저장하는 중' : '추가했어요 (예시 화면이라 이 기기에만 저장돼요)');
   }
 
+  /* ── 항목 자세히 · 지우기 ───────────────────────── */
+  const findItem = (kind, row) => (kind === 'event' ? S.data.events : S.data.tasks).find((x) => String(x.row) === String(row));
+  const findRaw = (kind, row) => currentRaw()[kind === 'event' ? 'events' : 'tasks'].find((x) => String(x.row) === String(row));
+
+  function openItem(kind, row) {
+    const it = findItem(kind, row);
+    if (!it) return;
+    S.itemSel = { kind, row: it.row, title: it.title, date: it.date || '' };
+    const isEv = kind === 'event';
+    const repeating = it.rep.type !== 'once';
+    const when = !repeating
+      ? (it.date ? fmtShort(it.date) : '언제든 (날짜 없음)')
+      : `${it.rep.label} 반복${it.date ? ` · ${fmtShort(it.date)}부터` : ''}${it.until ? ` · ${fmtShort(it.until)}까지` : ''}`;
+    const info = [['날짜', when]];
+    if (isEv) info.push(['시간', it.start ? `${it.start}${it.end ? ` ~ ${it.end}` : ''}` : '종일']);
+    if (it.alert != null) info.push(['마감 알림', C.alertLabel(it.alert)]);
+    if (it.memo) info.push(['메모', it.memo]);
+    if (S.url) info.push(['시트', it.pending ? '저장하는 중' : `'${isEv ? '일정' : '체크리스트'}' 탭 ${it.row}행`]);
+    let note = repeating ? '반복 항목이라 지우면 모든 날짜에서 사라져요.' : '';
+    let canDelete = true;
+    if (it.pending) { canDelete = false; note = '시트에 저장하는 중이에요. 잠시 뒤에 지울 수 있어요.'; }
+    else if (S.url && S.serverVersion < 2) {
+      canDelete = false;
+      note = '사이트에서 지우려면 시트의 연결 코드를 새 버전으로 바꿔야 해요. <a href="https://github.com/jun2peter/day#연결-코드-새-버전으로-바꾸기" target="_blank" rel="noopener">바꾸는 방법</a>';
+    }
+    const dlg = $('#dlg-item');
+    dlg.innerHTML = `
+      <div class="sheet-head"><h2 id="item-kind">${isEv ? '일정' : '할 일'}</h2><button class="icon-btn" data-action="close" aria-label="닫기">${I.x}</button></div>
+      <div class="sheet-body">
+        <div class="item-title">${esc(it.title)}</div>
+        <dl class="info">${info.map(([k, v]) => `<dt>${k}</dt><dd>${esc(v)}</dd>`).join('')}</dl>
+        ${note ? `<p class="hint">${note}</p>` : ''}
+      </div>
+      <div class="sheet-foot">
+        <button class="btn" data-action="close">닫기</button>
+        <button class="btn danger-fill" data-action="delete-item"${canDelete ? '' : ' disabled'}>지우기</button>
+      </div>`;
+    dlg.showModal();
+  }
+
+  // 지우기는 두 번 눌러야 지워짐 (실수 방지)
+  function deleteItem(btn) {
+    if (btn.dataset.armed !== '1') {
+      btn.dataset.armed = '1';
+      btn.classList.add('armed');
+      btn.textContent = '한 번 더 누르면 지워져요';
+      return;
+    }
+    const sel = S.itemSel;
+    if (!sel) return;
+    const raw = findRaw(sel.kind, sel.row);
+    $('#dlg-item').close();
+    if (S.url) {
+      const op = queue({ action: 'delete', kind: sel.kind, row: sel.row, title: sel.title, date: sel.date });
+      S.lastDeleted = { op, raw, kind: sel.kind };
+    } else {
+      const gone = LS.get('demoDeleted', []);
+      gone.push({ kind: sel.kind, row: sel.row });
+      LS.set('demoDeleted', gone);
+      S.lastDeleted = { demo: true, kind: sel.kind, row: sel.row };
+      rebuild();
+      render();
+    }
+    toast(`'${sel.title}' 지웠어요`, { label: '되돌리기', action: 'undo' });
+  }
+
+  function undo() {
+    const d = S.lastDeleted;
+    if (!d) return;
+    S.lastDeleted = null;
+    if (d.demo) {
+      LS.set('demoDeleted', LS.get('demoDeleted', []).filter((g) => !(g.kind === d.kind && String(g.row) === String(d.row))));
+      rebuild();
+      render();
+    } else if (S.outbox.includes(d.op)) {
+      // 아직 시트로 안 보냈으면 그냥 취소
+      S.outbox = S.outbox.filter((o) => o !== d.op);
+      saveOutbox();
+      rebuild();
+      render();
+    } else if (d.raw) {
+      // 이미 지워졌으면 같은 내용으로 다시 추가
+      const row = Object.assign({}, d.raw);
+      delete row.row;
+      delete row.pending;
+      queue({ action: 'add', kind: d.kind, row });
+    }
+    toast('되돌렸어요');
+  }
+
   /* ── 설정 창 ───────────────────────── */
   function openSettings() {
     const probs = (S.data && S.data.problems) || [];
@@ -686,12 +792,13 @@
   }
 
   let toastTimer;
-  function toast(msg) {
+  function toast(msg, act) {
     const el = $('#toast');
-    el.textContent = msg;
+    el.innerHTML = esc(msg) + (act ? `<button class="toast-act" data-action="${act.action}">${esc(act.label)}</button>` : '');
+    el.classList.toggle('has-act', !!act);
     el.classList.add('show');
     clearTimeout(toastTimer);
-    toastTimer = setTimeout(() => el.classList.remove('show'), 2600);
+    toastTimer = setTimeout(() => el.classList.remove('show', 'has-act'), act ? 6000 : 2600);
   }
 
   /* ── 이벤트 ───────────────────────── */
@@ -714,6 +821,9 @@
     else if (a === 'save-url') saveUrl(el);
     else if (a === 'disconnect') disconnect();
     else if (a === 'copy-link') copyLink();
+    else if (a === 'item') openItem(el.dataset.kind, el.dataset.row);
+    else if (a === 'delete-item') deleteItem(el);
+    else if (a === 'undo') undo();
   });
 
   // 대화상자 바깥(어두운 부분)을 누르면 닫기

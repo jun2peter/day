@@ -1,5 +1,5 @@
 /**
- * Day 플래너 ↔ 구글 시트 연결 코드
+ * Day 플래너 ↔ 구글 시트 연결 코드 · 버전 2 (사이트에서 지우기)
  *
  * 쓰는 법 (한 번만 하면 돼요)
  *  1. 플래너로 쓸 구글 시트에서  확장 프로그램 → Apps Script
@@ -34,7 +34,11 @@ function doPost(e) {
     var lock = LockService.getScriptLock();
     lock.waitLock(20000);
     try {
-      (body.ops || []).forEach(applyOp_);
+      // 지우기는 아래 줄부터 처리해야 줄 번호가 안 밀려요
+      var ops = body.ops || [];
+      var dels = ops.filter(function (o) { return o && o.action === 'delete'; })
+        .sort(function (a, b) { return Number(b.row) - Number(a.row); });
+      ops.filter(function (o) { return !o || o.action !== 'delete'; }).concat(dels).forEach(applyOp_);
       SpreadsheetApp.flush();
     } finally {
       lock.releaseLock();
@@ -51,6 +55,7 @@ function applyOp_(op) {
   if (op.id && cache.get('op:' + op.id)) return; // 같은 요청이 두 번 와도 한 번만
   if (op.action === 'toggle') toggle_(op);
   else if (op.action === 'add') add_(op);
+  else if (op.action === 'delete') delete_(op);
   if (op.id) cache.put('op:' + op.id, '1', 21600);
 }
 
@@ -68,7 +73,10 @@ function toggle_(op) {
     if (d === date && String(values[r][1]).trim() === title) hit.push(r + 1);
   }
   if (op.done) {
-    if (!hit.length) sh.appendRow([date, title, new Date()]);
+    if (!hit.length) {
+      sh.appendRow([date, title, new Date()]);
+      sh.getRange(sh.getLastRow(), 3).setNumberFormat('yyyy-mm-dd hh:mm');
+    }
   } else {
     for (var i = hit.length - 1; i >= 0; i--) sh.deleteRow(hit[i]);
   }
@@ -90,12 +98,44 @@ function add_(op) {
   sh.appendRow(row);
 }
 
+/* 사이트에서 [지우기] → 그 줄을 통째로 지움.
+ * 그사이 시트에서 줄이 밀렸으면 제목+날짜가 같은 줄을 찾아서 지움 */
+function delete_(op) {
+  var sh = sheet_(op.kind === 'event' ? TABS.event : TABS.task);
+  var tz = SpreadsheetApp.getActiveSpreadsheet().getSpreadsheetTimeZone();
+  var title = String(op.title || '').trim();
+  if (!title) return;
+  var range = sh.getDataRange();
+  var values = range.getValues();
+  var shown = range.getDisplayValues();
+  var heads = values[0].map(function (h) { return String(h).replace(/\s/g, ''); });
+  var names = op.kind === 'event' ? ['제목', '일정', '내용', '할일'] : ['할일', '제목', '내용', '항목'];
+  var tc = -1;
+  names.some(function (n) { tc = heads.indexOf(n); return tc >= 0; });
+  if (tc < 0) return;
+  var dc = heads.indexOf('날짜');
+  var titleAt = function (r) { return String(shown[r - 1][tc]).trim(); };
+  var dateAt = function (r) {
+    if (dc < 0) return '';
+    var v = values[r - 1][dc];
+    return v instanceof Date ? Utilities.formatDate(v, tz, 'yyyy-MM-dd') : String(shown[r - 1][dc]).trim();
+  };
+  var r = Number(op.row);
+  if (!(r >= 2 && r <= values.length && titleAt(r) === title)) {
+    r = -1;
+    for (var i = 2; i <= values.length; i++) {
+      if (titleAt(i) === title && dateAt(i) === String(op.date || '')) { r = i; break; }
+    }
+  }
+  if (r > 0) sh.deleteRow(r);
+}
+
 function readAll_() {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   var tz = ss.getSpreadsheetTimeZone();
   return {
     ok: true,
-    version: 1,
+    version: 2,
     title: ss.getName(),
     sheetUrl: ss.getUrl(),
     events: readTable_(sheet_(TABS.event), tz),

@@ -105,6 +105,10 @@
     return '';
   };
 
+  const TITLE_KEYS = { event: ['제목', '일정', '내용', '할일'], task: ['할일', '제목', '내용', '항목'] };
+  const titleOf = (r, kind) => pick(r, ...TITLE_KEYS[kind]);
+  const dateOf = (r) => { const s = pick(r, '날짜', '시작일', '마감일', '일자'); return parseDate(s) || s; };
+
   /* 시트에서 받은 줄들 → 화면에서 쓰는 모양으로 */
   function normalize(raw) {
     const problems = [];
@@ -112,7 +116,7 @@
     const tasks = [];
     const read = (r, kind) => {
       const sheet = kind === 'event' ? '일정' : '체크리스트';
-      const title = kind === 'event' ? pick(r, '제목', '일정', '내용', '할일') : pick(r, '할일', '제목', '내용', '항목');
+      const title = titleOf(r, kind);
       if (!title) return null;
       const where = r.pending ? '방금 추가한 줄' : `'${sheet}' ${r.row}행`;
       const dateRaw = pick(r, '날짜', '시작일', '마감일', '일자');
@@ -233,7 +237,7 @@
 
   const api = {
     WD, pad, ymd, toNum, fromNum, addDays, diffDays, weekday, parts, daysInMonth, today, weekStart, keyOf,
-    parseDate, parseTime, parseRepeat, parseAlert, alertLabel, normalize, occursOn,
+    parseDate, parseTime, parseRepeat, parseAlert, alertLabel, normalize, occursOn, titleOf, dateOf,
     eventsOn, tasksOn, anytimeTasks, weekTasks, overdueTasks, alerts, cellItems,
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
