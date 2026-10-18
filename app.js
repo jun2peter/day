@@ -204,16 +204,22 @@
     }
   }
 
-  function queue(op) {
+  // batch: 여러 개를 한꺼번에 넣을 때는 화면 갱신·전송을 부르는 쪽에서 한 번만
+  function queue(op, batch) {
     op.id = Math.random().toString(36).slice(2) + Date.now().toString(36);
     if (op.action === 'toggle') S.outbox = S.outbox.filter((o) => !(o.action === 'toggle' && o.date === op.date && o.title === op.title));
     S.outbox.push(op);
     saveOutbox();
-    rebuild();
-    render();
+    if (!batch) {
+      rebuild();
+      render();
+      flushSoon();
+    }
+    return op;
+  }
+  function flushSoon() {
     clearTimeout(S.flushTimer);
     S.flushTimer = setTimeout(sync, 700); // 연달아 체크하면 한 번에 묶어서 보냄
-    return op;
   }
 
   /* ── 체크 · 추가 ───────────────────────── */
@@ -255,7 +261,8 @@
     return h ? `<span class="meta">${h}</span>` : '';
   }
 
-  const moreBtn = (it) => `<button class="more" data-action="item" data-kind="${it.kind}" data-row="${esc(it.row)}" aria-label="${esc(it.title)} 자세히 보기">${I.dots}</button>`;
+  // date: 이 버튼이 놓인 날짜 ('이날만 빼기'에 씀)
+  const moreBtn = (it, date) => `<button class="more" data-action="item" data-kind="${it.kind}" data-row="${esc(it.row)}" data-date="${esc(date || '')}" aria-label="${esc(it.title)} 자세히 보기">${I.dots}</button>`;
 
   function taskHtml(t, opts) {
     const done = S.done.has(t.key);
@@ -263,15 +270,15 @@
     return `<div class="item-row"><button class="task${done ? ' done' : ''}${pop}" data-action="toggle" data-date="${esc(t.dateKey)}" data-title="${esc(t.title)}" role="checkbox" aria-checked="${done}">
       <span class="box">${I.check}</span>
       <span class="task-body"><span class="task-title">${esc(t.title)}</span>${tags(t, opts)}</span>
-    </button>${moreBtn(t)}</div>`;
+    </button>${moreBtn(t, t.dateKey)}</div>`;
   }
 
-  function evHtml(e) {
+  function evHtml(e, d) {
     const time = e.start
       ? `<div class="ev-time">${e.start}${e.end ? `<small>~ ${e.end}</small>` : ''}</div>`
       : '<div class="ev-time allday">종일</div>';
     return `<div class="ev${e.alert != null ? ' alert' : ''}">${time}<div class="ev-bar"></div>
-      <div class="ev-body"><div class="ev-title">${esc(e.title)}</div>${tags(e)}</div>${moreBtn(e)}</div>`;
+      <div class="ev-body"><div class="ev-title">${esc(e.title)}</div>${tags(e)}</div>${moreBtn(e, d)}</div>`;
   }
 
   function alertHtml(a) {
@@ -332,7 +339,7 @@
       </div>
       <div class="sec">
         <h3 class="sec-title">일정 <span class="count">${ev.length || ''}</span></h3>
-        ${ev.length ? `<div class="evs">${ev.map(evHtml).join('')}</div>` : '<div class="empty">일정이 없어요</div>'}
+        ${ev.length ? `<div class="evs">${ev.map((e) => evHtml(e, d)).join('')}</div>` : '<div class="empty">일정이 없어요</div>'}
       </div>
       <div class="sec">
         <h3 class="sec-title">할 일 <span class="count">${tk.length ? `${doneN}/${tk.length}` : ''}</span></h3>
@@ -402,7 +409,7 @@
     const evs = `<section class="card events-card">
       <div class="sec">
         <h3 class="sec-title">${isToday ? '오늘' : '이날'} 일정 <span class="count">${ev.length || ''}</span></h3>
-        ${ev.length ? `<div class="evs">${ev.map(evHtml).join('')}</div>` : '<div class="empty">일정이 없어요</div>'}
+        ${ev.length ? `<div class="evs">${ev.map((e) => evHtml(e, d)).join('')}</div>` : '<div class="empty">일정이 없어요</div>'}
       </div>
     </section>`;
 
@@ -498,54 +505,85 @@
   }
   function shiftView(k) { S.view = C.addDays(S.view, k); render(); }
 
-  /* ── 추가하기 창 ───────────────────────── */
-  function repeatOptions(kind) {
+  /* ── 추가하기 · 수정하기 창 ───────────────────────── */
+  const REPEAT_STD = ['', '매일', '평일', '주말', '매주', '격주', '매월', '매년', '주간'];
+  const ALERT_STD = ['', '당일', '1일 전', '2일 전', '3일 전', '1주 전', '2주 전', '한 달 전'];
+  const stripRow = (r) => { const o = Object.assign({}, r); delete o.row; delete o.pending; return o; };
+
+  // custom: 시트에 적힌 값이 목록에 없을 때(예: '매월 15일') 그대로 고를 수 있게
+  function repeatOptions(kind, custom) {
     const o = [['', '반복 안 함'], ['매일', '매일'], ['평일', '평일 (월~금)'], ['주말', '주말 (토·일)'], ['매주', '매주 (같은 요일)'], ['pick', '요일 고르기'],
       ['격주', '격주 (2주마다)'], ['매월', '매월 (같은 날짜)'], ['매년', '매년']];
     if (kind === 'task') o.push(['주간', '매주 아무 때나 한 번']);
-    return o.map(([v, l]) => `<option value="${v}">${l}</option>`).join('');
+    if (custom) o.push([custom, `그대로: ${custom}`]);
+    return o.map(([v, l]) => `<option value="${esc(v)}">${esc(l)}</option>`).join('');
+  }
+  function alertOptions(custom) {
+    const o = ALERT_STD.map((v) => [v, v || '알림 없음']);
+    if (custom) o.push([custom, `그대로: ${custom}`]);
+    return o.map(([v, l]) => `<option value="${esc(v)}">${esc(l)}</option>`).join('');
   }
 
+  // opts.edit = { kind, row, item, raw } 이면 그 줄을 고치는 창
   function openAdd(opts) {
     opts = opts || {};
-    const kind = opts.kind || (S.tab === 'today' ? 'task' : 'event');
-    const date = opts.date || (S.tab === 'today' ? S.view : S.sel);
+    const ed = opts.edit || null;
+    const it = ed ? ed.item : null;
+    const kind = ed ? ed.kind : opts.kind || (S.tab === 'today' ? 'task' : 'event');
+    const date = ed ? it.date : opts.date || (S.tab === 'today' ? S.view : S.sel);
     const dayOrder = [0, 1, 2, 3, 4, 5, 6].map((i) => (S.weekStart + i) % 7);
+    let repVal = '';
+    let repCustom = '';
+    let pickDays = [];
+    let alertVal = '';
+    let alertCustom = '';
+    if (ed) {
+      const rawRep = String(ed.raw['반복'] || '').trim();
+      if (REPEAT_STD.includes(rawRep)) repVal = rawRep;
+      else if (it.rep.type === 'days' && it.rep.days && it.rep.interval === 1) { repVal = 'pick'; pickDays = it.rep.days.map((d) => WD[d]); }
+      else { repVal = rawRep; repCustom = rawRep; }
+      const rawAlert = String(ed.raw['알림'] || '').trim();
+      alertVal = rawAlert;
+      if (!ALERT_STD.includes(rawAlert)) alertCustom = rawAlert;
+    }
+    S.editing = ed;
+    const val = (v) => esc(v || '');
     const dlg = $('#dlg-add');
     dlg.innerHTML = `<form id="add-form" novalidate>
-      <div class="sheet-head"><h2 id="add-title">추가하기</h2><button type="button" class="icon-btn" data-action="close" aria-label="닫기">${I.x}</button></div>
+      <div class="sheet-head"><h2 id="add-title">${ed ? '수정하기' : '추가하기'}</h2><button type="button" class="icon-btn" data-action="close" aria-label="닫기">${I.x}</button></div>
       <div class="sheet-body">
         <div class="seg" role="radiogroup" aria-label="종류">
           <label><input type="radio" name="kind" value="task"${kind === 'task' ? ' checked' : ''}><span>할 일 (체크리스트)</span></label>
           <label><input type="radio" name="kind" value="event"${kind === 'event' ? ' checked' : ''}><span>일정</span></label>
         </div>
-        <label class="field"><span>제목</span><input name="title" maxlength="120" autocomplete="off" enterkeyhint="done" placeholder="예: 기획서 제출"></label>
+        <label class="field"><span>제목</span><input name="title" maxlength="120" autocomplete="off" enterkeyhint="done" placeholder="예: 기획서 제출" value="${val(ed && it.title)}"></label>
         <div class="row date-row">
-          <label class="field"><span>날짜 <em class="task-only">(비우면 언제든)</em></span><input type="date" name="date" value="${date}"></label>
-          <label class="field ev-only"><span>시작 <em>(선택)</em></span><input type="time" name="start"></label>
-          <label class="field ev-only"><span>끝 <em>(선택)</em></span><input type="time" name="end"></label>
+          <label class="field"><span>날짜 <em class="task-only">(비우면 언제든)</em></span><input type="date" name="date" value="${val(date)}"></label>
+          <label class="field ev-only"><span>시작 <em>(선택)</em></span><input type="time" name="start" value="${val(ed && it.start)}"></label>
+          <label class="field ev-only"><span>끝 <em>(선택)</em></span><input type="time" name="end" value="${val(ed && it.end)}"></label>
         </div>
         <div class="row">
           <label class="field"><span>반복</span><select name="repeat"></select></label>
-          <label class="field"><span>마감 알림</span><select name="alert">
-            <option value="">알림 없음</option><option>당일</option><option>1일 전</option><option>2일 전</option><option>3일 전</option><option>1주 전</option><option>2주 전</option><option>한 달 전</option>
-          </select></label>
+          <label class="field"><span>마감 알림</span><select name="alert">${alertOptions(alertCustom)}</select></label>
         </div>
-        <div class="days-pick" hidden>${dayOrder.map((i) => `<label><input type="checkbox" name="days" value="${WD[i]}"><span>${WD[i]}</span></label>`).join('')}</div>
-        <label class="field until-f" hidden><span>반복 끝나는 날 <em>(선택)</em></span><input type="date" name="until"></label>
-        <label class="field"><span>메모 <em>(선택)</em></span><input name="memo" maxlength="300" autocomplete="off"></label>
+        <div class="days-pick" hidden>${dayOrder.map((i) => `<label><input type="checkbox" name="days" value="${WD[i]}"${pickDays.includes(WD[i]) ? ' checked' : ''}><span>${WD[i]}</span></label>`).join('')}</div>
+        <label class="field until-f" hidden><span>반복 끝나는 날 <em>(선택)</em></span><input type="date" name="until" value="${val(ed && it.until)}"></label>
+        <label class="field"><span>메모 <em>(선택)</em></span><input name="memo" maxlength="300" autocomplete="off" value="${val(ed && it.memo)}"></label>
+        ${ed ? '<p class="hint">저장하면 시트에서 이 줄이 맨 아래로 옮겨져요.</p>' : ''}
         <p class="form-err" id="add-err" role="alert"></p>
       </div>
-      <div class="sheet-foot"><button type="button" class="btn" data-action="close">취소</button><button type="submit" class="btn primary">추가</button></div>
+      <div class="sheet-foot"><button type="button" class="btn" data-action="close">취소</button><button type="submit" class="btn primary">${ed ? '저장' : '추가'}</button></div>
     </form>`;
     const form = $('#add-form');
     const F = form.elements;
-    F.repeat.innerHTML = repeatOptions(kind);
+    F.repeat.innerHTML = repeatOptions(kind, repCustom);
+    F.repeat.value = repVal;
+    F.alert.value = alertVal;
     syncAddForm(form);
     form.addEventListener('change', (e) => {
       if (e.target.name === 'kind') {
         const prev = F.repeat.value;
-        F.repeat.innerHTML = repeatOptions(F.kind.value);
+        F.repeat.innerHTML = repeatOptions(F.kind.value, repCustom);
         F.repeat.value = [...F.repeat.options].some((o) => o.value === prev) ? prev : '';
       }
       syncAddForm(form);
@@ -564,7 +602,7 @@
       F.end.addEventListener(ev, fillEnd);
     });
     dlg.showModal();
-    if (matchMedia('(hover: hover)').matches) F.title.focus();
+    if (matchMedia('(hover: hover)').matches && !ed) F.title.focus();
   }
 
   function syncAddForm(form) {
@@ -592,7 +630,8 @@
       if (!days.length) return err('요일을 하나 이상 골라주세요');
       repeat = days.join(',');
     }
-    const floating = /^(매일|평일|주말)$/.test(repeat) || repeat.includes(',') || (kind === 'task' && (repeat === '' || repeat === '주간'));
+    const rep = C.parseRepeat(repeat);
+    const floating = (rep.type === 'days' && !!rep.days) || (rep.type === 'month' && !!rep.day) || (kind === 'task' && (repeat === '' || rep.type === 'week'));
     if (!date && !floating) return err(repeat ? '반복의 기준이 될 날짜를 골라주세요' : '날짜를 골라주세요');
     const until = repeat ? F.until.value : '';
     if (until && date && until < date) return err('반복 끝나는 날이 시작 날짜보다 빨라요');
@@ -600,20 +639,29 @@
     const row = kind === 'event'
       ? Object.assign(base, { 제목: title, 시작: F.start.value, 끝: F.end.value })
       : Object.assign(base, { 할일: title });
-    addRow(kind, row);
+    const ed = S.editing;
+    S.editing = null;
     $('#dlg-add').close();
+    if (ed) {
+      // 시트에만 있는 다른 칸(예: 장소)은 그대로 두고 고친 칸만 바꿔서, 원래 줄 대신 넣음
+      const keep = kind === ed.kind ? stripRow(ed.raw) : {};
+      change([{ kind, row: Object.assign(keep, row) }], [{ kind: ed.kind, row: ed.row, title: ed.item.title, date: ed.item.date, raw: ed.raw }], `'${title}' 수정했어요`);
+    } else {
+      addRow(kind, row);
+      toast(S.url ? '추가했어요 · 시트에 저장하는 중' : '추가했어요 (예시 화면이라 이 기기에만 저장돼요)');
+    }
     if (date && S.tab === 'cal') { S.sel = date; S.month = monthOf(date); render(); }
-    toast(S.url ? '추가했어요 · 시트에 저장하는 중' : '추가했어요 (예시 화면이라 이 기기에만 저장돼요)');
   }
 
-  /* ── 항목 자세히 · 지우기 ───────────────────────── */
+  /* ── 항목 자세히 · 이날만 빼기 · 수정 · 지우기 ───────────────────────── */
   const findItem = (kind, row) => (kind === 'event' ? S.data.events : S.data.tasks).find((x) => String(x.row) === String(row));
   const findRaw = (kind, row) => currentRaw()[kind === 'event' ? 'events' : 'tasks'].find((x) => String(x.row) === String(row));
 
-  function openItem(kind, row) {
+  // occ: ⋯ 버튼이 놓여 있던 날짜 (주간 할 일이면 그 주의 첫날)
+  function openItem(kind, row, occ) {
     const it = findItem(kind, row);
     if (!it) return;
-    S.itemSel = { kind, row: it.row, title: it.title, date: it.date || '' };
+    S.itemSel = { kind, row: it.row, occ: occ || '' };
     const isEv = kind === 'event';
     const repeating = it.rep.type !== 'once';
     const when = !repeating
@@ -624,26 +672,57 @@
     if (it.alert != null) info.push(['마감 알림', C.alertLabel(it.alert)]);
     if (it.memo) info.push(['메모', it.memo]);
     if (S.url) info.push(['시트', it.pending ? '저장하는 중' : `'${isEv ? '일정' : '체크리스트'}' 탭 ${it.row}행`]);
-    let note = repeating ? '반복 항목이라 지우면 모든 날짜에서 사라져요.' : '';
-    let canDelete = true;
-    if (it.pending) { canDelete = false; note = '시트에 저장하는 중이에요. 잠시 뒤에 지울 수 있어요.'; }
+    const canSkip = repeating && /^\d{4}-\d{2}-\d{2}$/.test(occ || '');
+    const skipLabel = !canSkip ? '' : it.rep.type === 'week'
+      ? `${fmtMD(occ)}~${fmtMD(C.addDays(occ, 6))} 주만 빼기`
+      : `${fmtShort(occ)}만 빼기`;
+    let note = !repeating ? '' : canSkip ? '지우기는 모든 날짜에서 없애요. 하루만 없애려면 위 버튼을 누르세요.' : '반복 항목이라 지우면 모든 날짜에서 사라져요.';
+    let ok = true;
+    if (it.pending) { ok = false; note = '시트에 저장하는 중이에요. 잠시 뒤에 고치거나 지울 수 있어요.'; }
     else if (S.url && S.serverVersion < 2) {
-      canDelete = false;
-      note = '사이트에서 지우려면 시트의 연결 코드를 새 버전으로 바꿔야 해요. <a href="https://github.com/jun2peter/day#연결-코드-새-버전으로-바꾸기" target="_blank" rel="noopener">바꾸는 방법</a>';
+      ok = false;
+      note = '사이트에서 고치거나 지우려면 시트의 연결 코드를 새 버전으로 바꿔야 해요. <a href="https://github.com/jun2peter/day#연결-코드-새-버전으로-바꾸기" target="_blank" rel="noopener">바꾸는 방법</a>';
     }
+    const dis = ok ? '' : ' disabled';
     const dlg = $('#dlg-item');
     dlg.innerHTML = `
       <div class="sheet-head"><h2 id="item-kind">${isEv ? '일정' : '할 일'}</h2><button class="icon-btn" data-action="close" aria-label="닫기">${I.x}</button></div>
       <div class="sheet-body">
         <div class="item-title">${esc(it.title)}</div>
         <dl class="info">${info.map(([k, v]) => `<dt>${k}</dt><dd>${esc(v)}</dd>`).join('')}</dl>
+        ${canSkip ? `<button class="btn wide" data-action="skip-item"${dis}>${esc(skipLabel)}</button>` : ''}
         ${note ? `<p class="hint">${note}</p>` : ''}
       </div>
       <div class="sheet-foot">
-        <button class="btn" data-action="close">닫기</button>
-        <button class="btn danger-fill" data-action="delete-item"${canDelete ? '' : ' disabled'}>지우기</button>
+        <button class="btn danger-fill" data-action="delete-item"${dis}>지우기</button>
+        <button class="btn primary" data-action="edit-item"${dis}>수정하기</button>
       </div>`;
     dlg.showModal();
+  }
+
+  function selected() {
+    const sel = S.itemSel;
+    const it = sel && findItem(sel.kind, sel.row);
+    const raw = sel && findRaw(sel.kind, sel.row);
+    return it && raw ? { sel, it, raw } : null;
+  }
+
+  function skipItem() {
+    const x = selected();
+    if (!x) return;
+    const { sel, it, raw } = x;
+    const { before, after } = C.splitAround(it, raw, sel.occ, S.weekStart);
+    $('#dlg-item').close();
+    const adds = [before, after].filter(Boolean).map((row) => ({ kind: sel.kind, row }));
+    const when = it.rep.type === 'week' ? `${fmtMD(sel.occ)} 주` : fmtShort(sel.occ);
+    change(adds, [{ kind: sel.kind, row: it.row, title: it.title, date: it.date, raw }], `'${it.title}' ${when}만 뺐어요`);
+  }
+
+  function editItem() {
+    const x = selected();
+    if (!x) return;
+    $('#dlg-item').close();
+    openAdd({ edit: { kind: x.sel.kind, row: x.it.row, item: x.it, raw: x.raw } });
   }
 
   // 지우기는 두 번 눌러야 지워짐 (실수 방지)
@@ -654,45 +733,58 @@
       btn.textContent = '한 번 더 누르면 지워져요';
       return;
     }
-    const sel = S.itemSel;
-    if (!sel) return;
-    const raw = findRaw(sel.kind, sel.row);
+    const x = selected();
+    if (!x) return;
     $('#dlg-item').close();
-    if (S.url) {
-      const op = queue({ action: 'delete', kind: sel.kind, row: sel.row, title: sel.title, date: sel.date });
-      S.lastDeleted = { op, raw, kind: sel.kind };
-    } else {
-      const gone = LS.get('demoDeleted', []);
-      gone.push({ kind: sel.kind, row: sel.row });
+    change([], [{ kind: x.sel.kind, row: x.it.row, title: x.it.title, date: x.it.date, raw: x.raw }], `'${x.it.title}' 지웠어요`);
+  }
+
+  /* 시트 바꾸기: 넣을 줄(adds)과 지울 줄(dels)을 한 번에. 되돌리기도 기억해둠
+   * 이날만 빼기 = 원래 줄 지우고 앞·뒤 두 줄 넣기, 수정 = 원래 줄 지우고 고친 줄 넣기 */
+  function change(adds, dels, msg) {
+    if (!S.url) {
+      const snap = { adds: LS.get('demoAdds', { events: [], tasks: [] }), gone: LS.get('demoDeleted', []) };
+      const da = JSON.parse(JSON.stringify(snap.adds));
+      const gone = snap.gone.slice();
+      for (const a of adds) {
+        const list = a.kind === 'event' ? da.events : da.tasks;
+        list.push(Object.assign({}, a.row, { row: 100 + list.length }));
+      }
+      for (const d of dels) gone.push({ kind: d.kind, row: d.row });
+      LS.set('demoAdds', da);
       LS.set('demoDeleted', gone);
-      S.lastDeleted = { demo: true, kind: sel.kind, row: sel.row };
-      rebuild();
-      render();
+      S.lastUndo = { demo: snap };
+    } else {
+      const ops = adds.map((a) => queue({ action: 'add', kind: a.kind, row: a.row }, true))
+        .concat(dels.map((d) => queue({ action: 'delete', kind: d.kind, row: d.row, title: d.title, date: d.date || '' }, true)));
+      // 이미 시트로 보낸 뒤에 되돌릴 때: 새로 넣은 줄은 제목+날짜로 찾아 지우고, 지운 줄은 다시 넣기
+      const reverse = adds.map((a) => ({ action: 'delete', kind: a.kind, row: 0, title: C.titleOf(a.row, a.kind), date: C.dateOf(a.row) || '' }))
+        .concat(dels.filter((d) => d.raw).map((d) => ({ action: 'add', kind: d.kind, row: stripRow(d.raw) })));
+      S.lastUndo = { ops, reverse };
+      flushSoon();
     }
-    toast(`'${sel.title}' 지웠어요`, { label: '되돌리기', action: 'undo' });
+    rebuild();
+    render();
+    toast(msg, { label: '되돌리기', action: 'undo' });
   }
 
   function undo() {
-    const d = S.lastDeleted;
-    if (!d) return;
-    S.lastDeleted = null;
-    if (d.demo) {
-      LS.set('demoDeleted', LS.get('demoDeleted', []).filter((g) => !(g.kind === d.kind && String(g.row) === String(d.row))));
-      rebuild();
-      render();
-    } else if (S.outbox.includes(d.op)) {
+    const u = S.lastUndo;
+    if (!u) return;
+    S.lastUndo = null;
+    if (u.demo) {
+      LS.set('demoAdds', u.demo.adds);
+      LS.set('demoDeleted', u.demo.gone);
+    } else if (u.ops.every((o) => S.outbox.includes(o))) {
       // 아직 시트로 안 보냈으면 그냥 취소
-      S.outbox = S.outbox.filter((o) => o !== d.op);
+      S.outbox = S.outbox.filter((o) => !u.ops.includes(o));
       saveOutbox();
-      rebuild();
-      render();
-    } else if (d.raw) {
-      // 이미 지워졌으면 같은 내용으로 다시 추가
-      const row = Object.assign({}, d.raw);
-      delete row.row;
-      delete row.pending;
-      queue({ action: 'add', kind: d.kind, row });
+    } else {
+      u.reverse.forEach((op) => queue(op, true));
+      flushSoon();
     }
+    rebuild();
+    render();
     toast('되돌렸어요');
   }
 
@@ -833,7 +925,9 @@
     else if (a === 'save-url') saveUrl(el);
     else if (a === 'disconnect') disconnect();
     else if (a === 'copy-link') copyLink();
-    else if (a === 'item') openItem(el.dataset.kind, el.dataset.row);
+    else if (a === 'item') openItem(el.dataset.kind, el.dataset.row, el.dataset.date);
+    else if (a === 'skip-item') skipItem();
+    else if (a === 'edit-item') editItem();
     else if (a === 'delete-item') deleteItem(el);
     else if (a === 'undo') undo();
   });

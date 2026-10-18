@@ -458,3 +458,4 @@ dialog::backdrop { background: rgba(10, 10, 20, .38); backdrop-filter: blur(2px)
 .btn.danger-fill.armed { background: var(--danger); color: #fff; }
 #toast.has-act { pointer-events: auto; }
 .toast-act { margin-left: 14px; color: inherit; font-weight: 800; text-decoration: underline; text-underline-offset: 3px; }
+.btn.wide { width: 100%; margin-top: 14px; }

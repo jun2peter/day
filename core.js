@@ -235,10 +235,47 @@
     return [...ev, ...tk];
   }
 
+  /* 반복 항목에서 하루(주간 할 일이면 그 주)만 빼기.
+   * 시트 줄 하나를 '그 전날까지' 줄과 '다음 번부터' 줄로 나눔. 없는 쪽은 null */
+  function splitAround(it, raw, skip, startDow) {
+    const base = Object.assign({}, raw);
+    delete base.row;
+    delete base.pending;
+    const r = it.rep;
+    if (r.type === 'week') {
+      const ws = weekStart(skip, startDow);
+      const next = addDays(ws, 7);
+      return {
+        before: !it.date || it.date < ws ? Object.assign({}, base, { 반복끝: addDays(ws, -1) }) : null,
+        after: !it.until || it.until >= next ? Object.assign({}, base, { 날짜: next }) : null,
+      };
+    }
+    const LIMIT = 800; // 매년 반복도 찾을 수 있게 2년 넘게 봄
+    let prev = null;
+    for (let k = 1; k <= LIMIT; k++) {
+      const d = addDays(skip, -k);
+      if (it.date && d < it.date) break;
+      if (occursOn(it, d)) { prev = d; break; }
+    }
+    let next = null;
+    for (let k = 1; k <= LIMIT; k++) {
+      const d = addDays(skip, k);
+      if (it.until && d > it.until) break;
+      if (occursOn(it, d)) { next = d; break; }
+    }
+    let after = null;
+    if (next) {
+      after = Object.assign({}, base, { 날짜: next });
+      // '매월'만 적힌 줄은 날짜 칸의 날짜를 따라가니, 시작 날짜가 바뀌어도 같은 날이 되게 박아둠
+      if (r.type === 'month' && !r.day && it.date) after.반복 = `매월 ${parts(it.date).d}일`;
+    }
+    return { before: prev ? Object.assign({}, base, { 반복끝: addDays(skip, -1) }) : null, after };
+  }
+
   const api = {
     WD, pad, ymd, toNum, fromNum, addDays, diffDays, weekday, parts, daysInMonth, today, weekStart, keyOf,
     parseDate, parseTime, parseRepeat, parseAlert, alertLabel, normalize, occursOn, titleOf, dateOf,
-    eventsOn, tasksOn, anytimeTasks, weekTasks, overdueTasks, alerts, cellItems,
+    eventsOn, tasksOn, anytimeTasks, weekTasks, overdueTasks, alerts, cellItems, splitAround,
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.DayCore = api;
